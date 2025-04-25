@@ -31,6 +31,14 @@ This tool is designed specifically for **data investigation and exploration** th
 
 ## How to use
 
+### Installing via Smithery
+
+To install TDengine Query Server for Claude Desktop automatically via [Smithery](https://smithery.ai/server/@Abeautifulsnow/tdengine-mcp):
+
+```bash
+npx -y @smithery/cli install @Abeautifulsnow/tdengine-mcp --client claude
+```
+
 ### Run from source code
 
 **The recommended way** to use this MCP server is to run it directly with `uv` without installation. This is how both Claude Desktop and Cursor are configured to use it in the examples below.
