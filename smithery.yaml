@@ -1,61 +1,63 @@
 # Smithery configuration file: https://smithery.ai/docs/config#smitheryyaml
+
 startCommand:
   type: stdio
-  # configSchema:
-  #   # JSON Schema defining the configuration options for the MCP.
-  #   type: object
-  #   required:
-  #     - taosHost
-  #     - taosUser
-  #     - taosPassword
-  #     - taosDatabase
-  #   properties:
-  #     taosHost:
-  #       type: string
-  #       description: "The hostname of the taos server. Use localhost for local connections or a specific address for remote databases. For Docker, host.docker.internal allows accessing the host machine."
-  #       default: "localhost"
-  #     taosPort:
-  #       type: number
-  #       description: "The port of the taos server (default: 6041)."
-  #       default: 6041
-  #     taosUser:
-  #       type: string
-  #       description: "The username for taos authentication."
-  #       default: "root"
-  #     taosPassword:
-  #       type: string
-  #       description: "The password for taos authentication."
-  #       default: "taosdata"
-  #     taosDatabase:
-  #       type: string
-  #       description: "The database to connect to."
-  #       default: "log"
-  #     taosTimeout:
-  #       type: number
-  #       description: "The timeout for the taos connection."
-  #       default: 30
-  #     logLevel:
-  #       type: string
-  #       description: "The log level to use."
-  #       default: "DEBUG"
-  #     transport:
-  #       type: string
-  #       description: "The transport to use."
-  #       default: "stdio"
+  configSchema:
+    # JSON Schema defining the configuration options for the MCP.
+    type: object
+    required:
+      - taosUser
+      - taosPassword
+      - taosDatabase
+    properties:
+      logLevel:
+        type: string
+        default: DEBUG
+        description: The log level to use.
+      taosHost:
+        type: string
+        default: localhost
+        description: The hostname of the taos server. Use localhost for local
+          connections or a specific address for remote databases. For Docker,
+          host.docker.internal allows accessing the host machine.
+      taosPort:
+        type: number
+        default: 6041
+        description: "The port of the taos server (default: 6041)."
+      taosUser:
+        type: string
+        default: root
+        description: The username for taos authentication.
+      transport:
+        type: string
+        default: stdio
+        description: The transport to use.
+      taosTimeout:
+        type: number
+        default: 30
+        description: The timeout for the taos connection.
+      taosDatabase:
+        type: string
+        default: log
+        description: The database to connect to.
+      taosPassword:
+        type: string
+        default: taosdata
+        description: The password for taos authentication.
   commandFunction:
-    # A function that produces the CLI command to start the MCP on stdio.
+    # A JS function that produces the CLI command based on the given config to start the MCP on stdio.
     |-
     (config) => ({ 
       command: 'tdengine-mcp-server', 
-      args: ['-trans', 'stdio', '-ll', 'debug']
-      # env: {
-      #   TDENGINE_HOST: config.taosHost,
-      #   TDENGINE_PORT: config.taosPort,
-      #   TDENGINE_USERNAME: config.taosUser,
-      #   TDENGINE_PASSWORD: config.taosPassword,
-      #   TDENGINE_DATABASE: config.taosDatabase,
-      #   TDENGINE_TIMEOUT: config.taosTimeout,
-      #   LOG_LEVEL: config.logLevel,
-      #   TRANSPORT: config.transport
-      # }
+      args: [],
+      env: {
+        TDENGINE_HOST: config.taosHost,
+        TDENGINE_PORT: config.taosPort,
+        TDENGINE_USERNAME: config.taosUser,
+        TDENGINE_PASSWORD: config.taosPassword,
+        TDENGINE_DATABASE: config.taosDatabase,
+        TDENGINE_TIMEOUT: config.taosTimeout,
+        LOG_LEVEL: config.logLevel,
+        TRANSPORT: config.transport
+      }
     })
