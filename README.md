@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/abeautifulsnow-tdengine-mcp-badge.png)](https://mseep.ai/app/abeautifulsnow-tdengine-mcp)
+
 # TDengine Query MCP Server
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
