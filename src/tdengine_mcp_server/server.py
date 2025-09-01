@@ -153,7 +153,9 @@ def validate_sql_stmt(sql_stmt: str):
     logger.debug(f"Received TaosSQL statement: {sql_stmt}")
     sql_stmt = sql_stmt.strip()
     if sql_stmt.upper().startswith(NOT_ALLOWED_TAOS_SQL):
-        logger.warning(f"Only isReadOnly statements are allowed. Received: {sql_stmt}")
+        logger.warning(
+            f"Only isReadOnly statements are allowed. Received: {sql_stmt}"
+        )
         raise ValueError(
             "Security restrictions: Only read-only statements such as queries are allowed to be executed. All other operations are prohibited."
         )
@@ -238,7 +240,9 @@ def register_tools(mcp: FastMCP):
     @mcp.tool(name="switch_db")
     def switch_db(
         ctx: Context,
-        db_name: str = Field(description="The name of the database to switch to"),
+        db_name: str = Field(
+            description="The name of the database to switch to"
+        ),
     ) -> TaosSqlResponse:
         """Switch to the specified database.
 
@@ -344,7 +348,7 @@ def register_resources(mcp: FastMCP):
 def register_prompts(mcp: FastMCP):
     @mcp.prompt()
     def taos_query() -> str:
-        """Query a Taos(涛思) database."""
+        """A guide to steer llm how to query Taos(涛思) database."""
 
         return get_prompt_template("prompt")
 
@@ -428,7 +432,7 @@ def parse_arguments():
         "-trans",
         "--transport",
         type=str,
-        choices=["sse", "stdio"],
+        choices=["sse", "stdio", "http"],
         default="sse",
         help="The transport to use. Default: `%(default)s`",
     )
@@ -447,17 +451,25 @@ def main():
         format="%(asctime)s - %(module)s.%(funcName)s:%(lineno)d - | %(levelname)s | - %(message)s",
     )
 
+    _transort = os.environ.get("TRANSPORT", args.transport)
+    _transport_is_http = _transort == "http"
+    if _transport_is_http:
+        _transort = "streamable-http"
+
     mcp_app = FastMCP(
         name="[TDengine-MCP-Server]",
-        description="TDengine-MCP-Server",
+        instructions="TDengine-MCP-Server",
         lifespan=server_lifespan,
         dependencies=["dotenv", "taospy"],
+        json_response=True if _transport_is_http else False,
+        stateless_http=True if _transport_is_http else False,
     )
-    mcp_app.config = get_taos_config(args)
+    mcp_app.config = get_taos_config(args)  # type: ignore
 
     for register_func in (register_prompts, register_tools, register_resources):
         register_func(mcp_app)
 
-    _transort = os.environ.get("TRANSPORT", args.transport)
-    logger.info(f"[TDengine-MCP-Server] server started with transport: {_transort}")
-    mcp_app.run(transport=_transort)
+    logger.info(
+        f"[TDengine-MCP-Server] server started with transport: {_transort}"
+    )
+    mcp_app.run(transport=_transort)  # type: ignore

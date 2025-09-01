@@ -44,4 +44,4 @@ RUN chown -R app:app /app
 USER app
 
 # when running the container, add --db-path and a bind mount to the host's db file
-CMD ["python", "-m", "tdengine_mcp_server", "-trans", "stdio"， "-ll", "debug"]
+CMD ["python", "-m", "tdengine_mcp_server", "-trans", "stdio", "-ll", "debug"]

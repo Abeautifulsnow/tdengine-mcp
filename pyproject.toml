@@ -1,6 +1,6 @@
 [project]
 name = "tdengine-mcp-server"
-version = "0.0.8"
+version = "0.0.9"
 description = "Add your description here"
 readme = "README.md"
 authors = [
@@ -25,6 +25,10 @@ disable_error_code = ["import-untyped", "arg-type", "attr-defined", "type-arg", 
 module = "*"
 disable_error_code = ["import-untyped", "arg-type", "attr-defined", "type-arg", "valid-type", "union-attr", "call-arg", "annotation-unchecked", "typeddict-item"]
 ignore_missing_imports = true
+
+[[tool.uv.index]]
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
 
 [project.scripts]
 tdengine-mcp-server = "tdengine_mcp_server:main"
