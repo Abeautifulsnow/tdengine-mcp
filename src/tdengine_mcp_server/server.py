@@ -1,4 +1,12 @@
+"""TDengine MCP Server.
+
+Migrated to the MCP Python SDK v2 API:
+``mcp.server.fastmcp.FastMCP`` no longer exists in v2, the high level server
+class is ``mcp.server.mcpserver.MCPServer`` (same decorator surface).
+"""
+
 import argparse
+import importlib.metadata
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -6,22 +14,55 @@ from typing import (
     Any,
     AsyncIterator,
     Dict,
-    Generator,
     List,
+    Literal,
     Optional,
     Tuple,
     TypedDict,
 )
 
 from dotenv import load_dotenv
-from mcp.server.fastmcp import Context, FastMCP
-from mcp.server.fastmcp.prompts.base import Message, UserMessage
+from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
+from mcp.server.mcpserver.prompts.base import Message, UserMessage
 from pydantic import Field
 from taosrest import RestClient
 
 from .template import get_prompt_template
 
 logger = logging.getLogger(__name__)
+
+SERVER_NAME = "[TDengine-MCP-Server]"
+
+#: Transports understood by the SDK. ``streamable-http`` is new in SDK v2.
+Transport = Literal["stdio", "sse", "streamable-http"]
+
+#: ``http`` is the name this project has exposed since 0.0.9, the SDK calls it
+#: ``streamable-http``. Both spellings are accepted.
+TRANSPORT_ALIASES = {"http": "streamable-http"}
+SUPPORTED_TRANSPORTS = ("stdio", "sse", "streamable-http")
+
+# Host/port defaults for the HTTP based transports. Keep listening on all
+# interfaces by default: SDK v1 used to read ``MCP_HOST``/``MCP_PORT`` env vars
+# (default ``0.0.0.0:8000``), SDK v2 no longer reads them, so we do it here.
+DEFAULT_HTTP_HOST = "0.0.0.0"
+DEFAULT_HTTP_PORT = 8000
+
+
+def _resolve_version() -> str:
+    """Report the installed package version in ``serverInfo``.
+
+    SDK v1 fell back to the version of the ``mcp`` package itself, v2 reports an
+    empty string unless the server passes its own version.
+    """
+
+    try:
+        return importlib.metadata.version("tdengine-mcp-server")
+    except importlib.metadata.PackageNotFoundError:  # running from source
+        return "0.1.0"
+
+
+__version__ = _resolve_version()
 
 
 NOT_ALLOWED_TAOS_SQL: Tuple = (
@@ -87,9 +128,11 @@ class TAOSClient:
         self.database = database
         self.timeout = timeout
 
-        self.client: RestClient = next(self.init_db())
+        self.client: RestClient = self.init_db()
 
-    def init_db(self) -> Generator[RestClient, None, None]:
+    def init_db(self) -> RestClient:
+        """Build the REST client. ``taosrest`` connects lazily on first query."""
+
         _url = f"http://{self.host}:{self.port}"
         try:
             client = RestClient(
@@ -100,7 +143,7 @@ class TAOSClient:
                 timeout=self.timeout,  # type: ignore
             )
             logger.info("Have initialized the taos client.")
-            yield client
+            return client
         except Exception as e:
             logger.error(
                 f"Failed to connect to taos db => url: {_url}, host: {self.host}, username: {self.username}, database: {self.database}"
@@ -125,9 +168,14 @@ class TAOSClient:
                 data=result.get("data", []),
                 rows=result.get("rows", -1),
             )
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(f"Failed to execute SQL statement: {sql_stmt}")
-            raise e
+            # SDK v2 turns an uncaught handler exception into a generic
+            # "Error executing tool <name>" for the client. ToolError is the
+            # channel that keeps the real message visible to the model.
+            raise ToolError(f"Failed to execute SQL statement: {e}") from e
 
 
 class TaosContext:
@@ -135,16 +183,27 @@ class TaosContext:
         self.client = client
 
 
-@asynccontextmanager
-async def server_lifespan(server: FastMCP) -> AsyncIterator[TaosContext]:
-    """Manage application lifecycle for TDengine client."""
+def create_lifespan(client: TAOSClient):
+    """Build the lifespan for the given client.
 
-    config = server.config
+    SDK v2: the lifespan signature is unchanged,
+    ``ctx.request_context.lifespan_context`` still resolves to the yielded value.
+    """
 
-    try:
-        yield TaosContext(TAOSClient(**config))
-    finally:
-        pass
+    @asynccontextmanager
+    async def lifespan(server: MCPServer) -> AsyncIterator[TaosContext]:
+        """Manage application lifecycle for TDengine client."""
+
+        logger.info(
+            f"{SERVER_NAME} serving "
+            f"{client.host}:{client.port}/{client.database}"
+        )
+        try:
+            yield TaosContext(client)
+        finally:
+            pass
+
+    return lifespan
 
 
 def validate_sql_stmt(sql_stmt: str):
@@ -153,10 +212,8 @@ def validate_sql_stmt(sql_stmt: str):
     logger.debug(f"Received TaosSQL statement: {sql_stmt}")
     sql_stmt = sql_stmt.strip()
     if sql_stmt.upper().startswith(NOT_ALLOWED_TAOS_SQL):
-        logger.warning(
-            f"Only isReadOnly statements are allowed. Received: {sql_stmt}"
-        )
-        raise ValueError(
+        logger.warning(f"Only isReadOnly statements are allowed. Received: {sql_stmt}")
+        raise ToolError(
             "Security restrictions: Only read-only statements such as queries are allowed to be executed. All other operations are prohibited."
         )
 
@@ -175,8 +232,8 @@ def get_taos_config(args: argparse.Namespace) -> TaosConfig:
     }
 
 
-def register_tools(mcp: FastMCP):
-    """Register tools for the FastMCP application."""
+def register_tools(mcp: MCPServer):
+    """Register tools for the MCP server."""
 
     @mcp.tool(name="test_table_exists")
     def test_table_exists(
@@ -189,7 +246,7 @@ def register_tools(mcp: FastMCP):
             stable_name (str): The name of the stable.
 
         Returns:
-            Dict: The `stable_name` exists or not in the current Taos configuration. If the `stable_name` does not exist, an empty dictionary is returned.
+            Dict: The `stable_name` exists or not in the current Taos configuration.
 
             The key of the dictionary is the `stable_name` name, and the value is a boolean indicating whether the `stable_name` exists.
         """
@@ -197,7 +254,10 @@ def register_tools(mcp: FastMCP):
         taos = ctx.request_context.lifespan_context.client
         query = f"SHOW STABLES LIKE '{stable_name}'"
         result = taos.execute_sql(query)
-        return {stable_name: bool(result)}
+        # `SHOW STABLES LIKE` returns an empty `data` list when nothing matches,
+        # a non-empty one otherwise. Previously this was `bool(result)`, which is
+        # always True because the response dict is never empty.
+        return {stable_name: bool(result.get("data"))}
 
     @mcp.tool(name="get_all_dbs")
     def get_all_dbs(ctx: Context) -> TaosSqlResponse:
@@ -240,9 +300,7 @@ def register_tools(mcp: FastMCP):
     @mcp.tool(name="switch_db")
     def switch_db(
         ctx: Context,
-        db_name: str = Field(
-            description="The name of the database to switch to"
-        ),
+        db_name: str = Field(description="The name of the database to switch to"),
     ) -> TaosSqlResponse:
         """Switch to the specified database.
 
@@ -298,7 +356,7 @@ def register_tools(mcp: FastMCP):
             sql_stmt (str): The sql statement you want to retrieve data from taos db.
 
         Returns:
-            List: All data from the specified table.
+            TaosSqlResponse: All data from the specified table.
 
         """
 
@@ -306,12 +364,12 @@ def register_tools(mcp: FastMCP):
         return taos.execute_sql(sql_stmt)  # type: ignore
 
 
-def register_resources(mcp: FastMCP):
-    taos = TAOSClient(**mcp.config)
+def register_resources(mcp: MCPServer, taos: TAOSClient):
+    """Register resources backed by the shared TDengine client."""
 
     @mcp.resource("taos://database", mime_type="text/plain")
     def get_current_taos_database() -> List:
-        """Get current mysql database."""
+        """Get current taos database."""
 
         result = taos.execute_sql("SHOW DATABASES;")
         return result.get("data", [])
@@ -345,7 +403,7 @@ def register_resources(mcp: FastMCP):
         return schema
 
 
-def register_prompts(mcp: FastMCP):
+def register_prompts(mcp: MCPServer):
     @mcp.prompt()
     def taos_query() -> str:
         """A guide to steer llm how to query Taos(涛思) database."""
@@ -432,16 +490,58 @@ def parse_arguments():
         "-trans",
         "--transport",
         type=str,
-        choices=["sse", "stdio", "http"],
+        choices=["sse", "stdio", "http", "streamable-http"],
         default="sse",
-        help="The transport to use. Default: `%(default)s`",
+        help="The transport to use (`http` is an alias of `streamable-http`). Default: `%(default)s`",
+    )
+    parser.add_argument(
+        "--host",
+        type=str,
+        default=DEFAULT_HTTP_HOST,
+        help="Host to bind for the HTTP transports (sse / streamable-http). Default: `%(default)s`",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=DEFAULT_HTTP_PORT,
+        help="Port to bind for the HTTP transports (sse / streamable-http). Default: `%(default)d`",
     )
 
     return parser.parse_args()
 
 
+def create_app(config: TaosConfig, client: Optional[TAOSClient] = None) -> MCPServer:
+    """Build the MCP server.
+
+    SDK v2 notes:
+    * ``FastMCP`` -> ``MCPServer`` and ``description`` / ``version`` are real
+      constructor parameters now;
+    * transport options (host / port / paths) moved from the constructor to
+      ``run()``, so nothing transport specific is passed here.
+    """
+
+    taos = client if client is not None else TAOSClient(**config)
+
+    mcp_app = MCPServer(
+        name=SERVER_NAME,
+        description="TDengine-MCP-Server",
+        instructions="Read-only TDengine query server",
+        version=__version__,
+        lifespan=create_lifespan(taos),
+        dependencies=["python-dotenv", "taospy"],
+    )
+
+    for register_func in (register_prompts, register_tools):
+        register_func(mcp_app)
+    register_resources(mcp_app, taos)
+
+    return mcp_app
+
+
 def main():
     # Initialize the Taos client
+    # NOTE: SDK v2 no longer reads `.env` / `MCP_*` environment variables on its
+    # own, loading the dotenv file is the app's responsibility (as before).
     load_dotenv()
     args = parse_arguments()
 
@@ -451,25 +551,42 @@ def main():
         format="%(asctime)s - %(module)s.%(funcName)s:%(lineno)d - | %(levelname)s | - %(message)s",
     )
 
-    _transort = os.environ.get("TRANSPORT", args.transport)
-    _transport_is_http = _transort == "http"
-    if _transport_is_http:
-        _transort = "streamable-http"
+    transport: str = os.environ.get("TRANSPORT", args.transport).strip().lower()
+    # `http` is accepted as an alias of `streamable-http`.
+    transport = TRANSPORT_ALIASES.get(transport, transport)
+    # Exit code 1 is a hard failure, never silently fall back to another transport.
+    if transport not in SUPPORTED_TRANSPORTS:
+        raise SystemExit(
+            f"Unsupported transport: {transport!r}. "
+            f"Choose from {', '.join([*SUPPORTED_TRANSPORTS, *TRANSPORT_ALIASES])}."
+        )
 
-    mcp_app = FastMCP(
-        name="[TDengine-MCP-Server]",
-        instructions="TDengine-MCP-Server",
-        lifespan=server_lifespan,
-        dependencies=["dotenv", "taospy"],
-        json_response=True if _transport_is_http else False,
-        stateless_http=True if _transport_is_http else False,
-    )
-    mcp_app.config = get_taos_config(args)  # type: ignore
+    mcp_app = create_app(get_taos_config(args))
 
-    for register_func in (register_prompts, register_tools, register_resources):
-        register_func(mcp_app)
+    host = os.environ.get("MCP_HOST", args.host)
+    port = int(os.environ.get("MCP_PORT", args.port))
 
     logger.info(
-        f"[TDengine-MCP-Server] server started with transport: {_transort}"
+        f"{SERVER_NAME} server started with transport: {transport}"
+        + ("" if transport == "stdio" else f" ({host}:{port})")
     )
-    mcp_app.run(transport=_transort)  # type: ignore
+
+    if transport == "stdio":
+        mcp_app.run(transport="stdio")
+    elif transport == "streamable-http":
+        # v2: host/port/json_response/stateless_http are run() options, they used
+        # to be constructor settings. Stateless + JSON responses keep the server
+        # usable behind a plain HTTP proxy / load balancer.
+        mcp_app.run(
+            transport="streamable-http",
+            host=host,
+            port=port,
+            json_response=True,
+            stateless_http=True,
+        )
+    else:
+        mcp_app.run(transport="sse", host=host, port=port)
+
+
+if __name__ == "__main__":
+    main()

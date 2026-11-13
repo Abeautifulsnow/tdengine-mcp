@@ -5,6 +5,8 @@
 
 A Model Context Protocol (MCP) server that provides **read-only** TDengine database queries for AI assistants. Execute queries, explore database structures, and investigate your data directly from your AI-powered tools.
 
+> **Requirements**: Python 3.12+ and the [MCP Python SDK v2](https://pypi.org/project/mcp/) (`mcp>=2.3,<3`). See [Migrating to MCP SDK v2](#migrating-to-mcp-sdk-v2) if you are coming from `0.0.x`.
+
 ## Supported AI Tools
 
 This MCP server works with any tool that supports the Model Context Protocol, including:
@@ -96,14 +98,21 @@ You can change the client after the `--client` option with alternatives `claude`
 | TDENGINE_PASSWORD | Database password | taosdata |
 | TDENGINE_DATABASE | Database name | log |
 | TDENGINE_TIMEOUT | Set the connection timeout in seconds | 30 |
-| TRANSPORT | Control the transport to use | stdio |
+| TRANSPORT | Control the transport to use (`stdio` / `sse` / `streamable-http`; `http` is an alias of `streamable-http`) | stdio |
+| MCP_HOST | Host to bind for the HTTP transports (`sse` / `streamable-http`) | 0.0.0.0 |
+| MCP_PORT | Port to bind for the HTTP transports (`sse` / `streamable-http`) | 8000 |
+
+> `.env` is loaded by the server itself (`python-dotenv`), not by the MCP SDK. Since SDK v2 no longer reads `MCP_*` variables or `.env` files on its own, `MCP_HOST` / `MCP_PORT` are honoured by this server's own configuration layer.
 
 ### cli usage
 
 ```text
 $ python3 -m tdengine_mcp_server -h
 
-usage: __main__.py [-h] [-th TAOS_HOST] [-tp TAOS_PORT] [-tu TAOS_USERNAME] [-pwd TAOS_PASSWORD] [-db TAOS_DATABASE] [-to TAOS_TIMEOUT] [-ll LOG_LEVEL]
+usage: __main__.py [-h] [-th TAOS_HOST] [-tp TAOS_PORT] [-tu TAOS_USERNAME]
+                   [-pwd TAOS_PASSWORD] [-db TAOS_DATABASE] [-to TAOS_TIMEOUT]
+                   [-ll LOG_LEVEL] [-trans {sse,stdio,http,streamable-http}]
+                   [--host HOST] [--port PORT]
 
 TDengine MCP Server
 
@@ -123,9 +132,16 @@ options:
                         TDengine connection timeout. Default: `30`
   -ll, --log-level LOG_LEVEL
                         Log level. Default: `INFO`
-  -trans, --transport {sse,stdio}
-                        The transport to use. Default: `sse`
+  -trans {sse,stdio,http,streamable-http}, --transport {sse,stdio,http,streamable-http}
+                        The transport to use (`http` is an alias of
+                        `streamable-http`). Default: `sse`
+  --host HOST           Host to bind for the HTTP transports (sse /
+                        streamable-http). Default: `0.0.0.0`
+  --port PORT           Port to bind for the HTTP transports (sse /
+                        streamable-http). Default: `8000`
 ```
+
+HTTP endpoints: `sse` serves `GET /sse` (messages back to `POST /messages/`), `http` / `streamable-http` serves `/mcp`. The HTTP transport runs stateless with JSON responses, so it can sit behind a plain reverse proxy or load balancer.
 
 ## Integration with AI Assistants
 
@@ -147,26 +163,37 @@ Can you list all the available databases we have?
 
 ### Using TDengine MCP Tools
 
-The TDengine Query MCP server provides three main tools that your AI assistant can use:
+The server exposes six tools, two resources and two prompts:
 
-#### 1. query
+| Tool | Purpose |
+|---|---|
+| `query_taos_db_data` | Run any read-only SQL (`SELECT`, `SHOW`, `DESCRIBE`, ...) |
+| `get_all_dbs` | List databases |
+| `get_all_stables` | List stables of a database (defaults to the configured one) |
+| `get_field_infos` | `DESCRIBE` a stable (field name / type / length / note) |
+| `test_table_exists` | Check whether a stable exists |
+| `switch_db` | `USE <db>` for the current session |
 
-Execute read-only SQL queries against a specific stable:
+| Resource | Purpose |
+|---|---|
+| `taos://database` | Database list as text |
+| `taos://schemas` | All stables + field schema as JSON |
+
+| Prompt | Purpose |
+|---|---|
+| `taos_query` | TDengine-oriented prompt for writing queries |
+| `describe_query_prompt` | Ask the model to explain a given SQL statement |
+
+Example:
 
 ```
-Use the query tool to run:
+Use the query_taos_db_data tool to run:
 
 SELECT * FROM customers WHERE itemid > '2025-01-01' LIMIT 10;
 ```
 
-#### 2. info
-
-Get detailed information about your stable:
-
 ```
-Use the info tool to check the meta info about the specified stable.
-
-DESCRIBE disks_info;
+Use the get_field_infos tool to check the meta info about the specified stable.
 ```
 
 ## Security Considerations
@@ -191,6 +218,16 @@ If you're having trouble connecting:
 - Verify your SQL syntax
 - Check that you're only using supported query types (SELECT, SHOW, DESCRIBE)
 - Ensure your query is truly read-only
+
+## Migrating to MCP SDK v2
+
+Version `0.1.0` upgrades the server from MCP Python SDK `1.6.0` to `2.3.0`. The MCP surface (tool / resource / prompt names and arguments) is unchanged, so existing MCP clients keep working. Internally:
+
+- `FastMCP` was renamed to `MCPServer`; `mcp.server.fastmcp.*` no longer exists and all imports moved to `mcp.server.mcpserver.*`.
+- Transport options (`host`, `port`, `json_response`, `stateless_http`) are no longer constructor settings: they are passed to `run()`, and `streamable-http` (alias `http`) is available as a third transport. The `MCP_HOST` / `MCP_PORT` environment variables are read by this project instead of the SDK.
+- Tool handlers that raise now surface a generic `Error executing tool <name>` to the client, so database and SQL errors are raised as `ToolError` to keep the real reason visible to the model.
+- Sync handlers run on a worker thread in v2, so the blocking `taosrest` HTTP calls no longer stall the event loop.
+- `mcp` 2.x pulls `mcp-types`, `httpx2` and `opentelemetry-api`, and requires `pydantic>=2.12`; `httpx` / `httpx-sse` / `pydantic-settings` are no longer installed.
 
 ## Contributing
 

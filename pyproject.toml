@@ -1,7 +1,7 @@
 [project]
 name = "tdengine-mcp-server"
-version = "0.0.9"
-description = "Add your description here"
+version = "0.1.0"
+description = "A read-only TDengine MCP server for AI assistants"
 readme = "README.md"
 authors = [
     { email = "lcprunstone@163.com" }
@@ -9,7 +9,10 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "jinja2",
-    "mcp[cli]",
+    # MCP Python SDK v2（FastMCP 已更名为 MCPServer）
+    "mcp[cli]>=2.3.0,<3",
+    # 代码里显式 import dotenv，不依赖 mcp[cli] 的传递依赖
+    "python-dotenv>=1.0.0",
     "taospy",
 ]
 

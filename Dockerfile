@@ -43,5 +43,6 @@ RUN chown -R app:app /app
 # Switch to non-root user
 USER app
 
-# when running the container, add --db-path and a bind mount to the host's db file
+# Default to the stdio transport. Override when the container is reached over
+# HTTP, e.g. `-trans streamable-http --host 0.0.0.0 --port 8000` (and publish the port).
 CMD ["python", "-m", "tdengine_mcp_server", "-trans", "stdio", "-ll", "debug"]
